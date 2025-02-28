@@ -84,7 +84,8 @@ class quadtree {
         }
     }
 }
-
+// http://www.lcad.icmc.usp.br/~jbatista/procimg/quadtree_neighbours.pdf
+// https://stackoverflow.com/questions/20837530/quadtree-nearest-neighbour-algorithm
 function buildquadtree(topnodesize) {
     grid = [];
 
