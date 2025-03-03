@@ -28,8 +28,21 @@ for (let i = 0; i < 10; i++) {
 }
 
 const topnodesize = 400;
+const leafnodesize = 5;
 const bucketcap = 1;
 let grid = [];
+let grids = [];
+
+const sizelookup = [];
+
+let currentsize = topnodesize;
+let iterations = 0;
+while (currentsize > 1) {
+    sizelookup[currentsize] = iterations;
+    sizelookup.push(iterations);
+    currentsize /= 2;
+    iterations++;
+}
 
 class quadtree {
     constructor(x, y, size) {
@@ -65,13 +78,14 @@ class quadtree {
     }
 
     addpoint(p) {
+        this.bucket.push(p);
+
         if (this.sprouted === true) {
             this.splitpoint(p);
             return
         }
-        this.bucket.push(p);
 
-        if (this.bucket.length > bucketcap) {
+        if (this.bucket.length > bucketcap && this.s > leafnodesize) {
             this.sprouted = true;
 
             this.nodes = [
@@ -84,7 +98,33 @@ class quadtree {
             for (let i = 0; i < bucketcap + 1; i++) {
                 this.splitpoint(this.bucket[i]);
             }
-            this.bucket = null;
+        }
+    }
+
+    turnhash() {
+        const key = this.centerx + " " + this.centery; // topcell position
+
+        const gridnum = sizelookup[this.s];
+        if (grids[gridnum] === undefined) grids[gridnum] = [];
+        
+        const selectedgrid = grids[gridnum];
+        if (selectedgrid[key] === undefined) selectedgrid[key] = [];
+
+        if (this.sprouted === true) {
+            for (let i = 0; i < 4; i++) {
+                const node = this.nodes[i];
+
+                if (node.bucket.length === 0) continue;
+
+                selectedgrid[key].push(node.centerx + " " + node.centery);
+                node.turnhash();
+            }
+
+            return;
+        }
+
+        for (let i = 0; i < this.bucket.length; i++) {
+            selectedgrid[key].push(this.bucket[i]);
         }
     }
 }
@@ -109,105 +149,134 @@ function buildquadtree() {
     }
 }
 
-function linearsearch(cells, origin) {
+function hashifyquadtree() {
+    grids = [];
+    for (const k in grid) {
+        grid[k].turnhash();
+    }
+}
+
+function getpossibleclosest(cells, points, x, y, disoffset) { // gets possible cells and points at the same time
     let closest = Number.MAX_VALUE;
-    let cell;
+    const distances = [];
+    const pointdistances = [];
 
-    for (let i = 0; i < cells.length; i++) {
-        const obj = cells[i];
+    for (const k in cells) {
+        const pos = k.split(" ");
 
-        const dx = obj.centerx - origin.x;
-        const dy = obj.centery - origin.y;
+        const dx = pos[0] - x;
+        const dy = pos[1] - y;
         const pdist = dx * dx + dy * dy;
 
         if (pdist < closest) {
             closest = pdist;
-            cell = obj;
         }
+        distances[k] = pdist;
     }
 
-    return { cell: cell, distance: closest };
-}
+    for (let i = 0; i < points.length; i++) {
+        const pos = points[i];
 
-function pdistancequery(subcells, origin, distance) { // distance inputted is assumed to be in squared form
-    const query = [];
-    
-    for (let i = 0; i < subcells.length; i++) {
-        const obj = subcells[i];
-
-        const dx = obj.centerx - origin.x;
-        const dy = obj.centery - origin.y;
+        const dx = pos.x - x;
+        const dy = pos.y - y;
         const pdist = dx * dx + dy * dy;
 
-        if (pdist < distance) {
-            query.push(obj);
+        if (pdist < closest) {
+            closest = pdist;
         }
+        pointdistances[i] = pdist;
     }
 
-    return query;
+    let possiblecells = [];
+    let possiblepoints = [];
+    const minimumdistance = closest + disoffset;
+    for (const k in distances) {
+        if (distances[k] < minimumdistance) possiblecells.push(cells[k]);
+    }
+
+    for (let i = 0; i < pointdistances; i++) {
+        if (pointdistances[i] < minimumdistance) possiblepoints.push(points[i]);
+    }
+
+    return { validcells: possiblecells, validpoints: possiblepoints };
 }
 
-const topnodecenterdist = topnodesize ** 2 * 2;
-function bundlequery(cells, x, y) { // returns cells that would have the closest point in them
-    if (cells.sprouted === true) {
-        cells = cells.nodes;
-    } else if (cells.sprouted === false) {
-        return cells.bucket; // really messy recursive function
+function linearsearchpoints(points, x, y) {
+    let closest = Number.MAX_VALUE;
+    let result;
+    for (let i = 0; i < points.length; i++) {
+        const p = points[i];
+        const dx = p.x - x;
+        const dy = p.y - y;
+        const pdist = dx * dx + dy * dy;
+        if (pdist < closest) {
+            closest = pdist;
+            result = i;
+        }
+    }
+    return { nearest: points[result], distance: closest };
+}
+
+const topnodecenterdist = topnodesize ** 3;
+function getnearestpoint(x, y) {
+    let finalquery = []; // contains individual points
+    let currentgrid = 0;
+    let lastpossiblecells = grids[0];
+
+    while (Object.keys(lastpossiblecells).length > 0) {
+        const disoffset = topnodecenterdist / (2 ** currentgrid);
+
+        const closest = getpossibleclosest(lastpossiblecells, finalquery, x, y, disoffset);
+        // TODO: also factor in "finalquery" points for getting minimum distance
+        console.log(closest)
+        lastpossiblecells = [];
+        finalquery = closest.validpoints;
+
+        for (let i = 0; i < closest.validcells.length; i++) {
+            const cellcontents = closest.validcells[i];
+            if (typeof cellcontents[0] === "object") {
+                for (let j = 0; j < cellcontents.length; j++) {
+                    finalquery.push(cellcontents[j]);
+                }
+                //finalquery = finalquery.concat(cellcontents);
+                continue;
+            }
+
+            for (let j = 0; j < cellcontents.length; j++) {
+                const subcellindex = cellcontents[j];
+                lastpossiblecells[subcellindex] = grids[currentgrid + 1][subcellindex];
+            }
+        }
+
+        currentgrid++;
     }
 
-    const p = linearsearch(cells, { // get cell that is closest for to get distance
-        x: x,
-        y: y
-    });
-    c.beginPath();
-    c.arc(p.cell.centerx, p.cell.centery, 6, Math.PI * 2, 0);
-    c.fill();
-
-    const query = pdistancequery(cells, {
-        x: x,
-        y: y
-    }, topnodecenterdist + p.distance); // let distance be a + b.
-
-    let finalquery = [];
-    for (let i = 0; i < query.length; i++) {
-        const obj = query[i];
-        finalquery = [...finalquery, ...bundlequery(obj, x, y)];
-
+    c.fillStyle = "rgb(255, 0, 0)";
+    for (let i = 0; i < finalquery.length; i++) {
+        const pos = finalquery[i];
         c.beginPath();
-        c.arc(obj.centerx, obj.centery, 6, Math.PI * 2, 0);
+        c.arc(pos.x, pos.y, 2, Math.PI * 2, 0);
         c.fill();
     }
 
-    return finalquery;
-}
-
-function getnearestpoint(x, y) {
-    const finalquery = []; // contains points for linear searching
-
-    const topnodequery = [];
-    for (const k in grid) {
-        topnodequery.push(grid[k]);
-    }
-
-    finalquery = bundlequery(topnodequery, x, y);
-
-    let closest = Number.MAX_VALUE; // final step
-    let point;
-
+    let closest = Number.MAX_VALUE;
+    let index;
     for (let i = 0; i < finalquery.length; i++) {
         const obj = finalquery[i];
-
         const dx = obj.x - x;
         const dy = obj.y - y;
-        const pdist = dx * dx + dy * dy;
 
+        const pdist = dx * dx + dy * dy;
         if (pdist < closest) {
             closest = pdist;
-            point = obj;
+            index = i;
         }
     }
-
-    return point;
+    
+    c.fillStyle = "rgb(0, 255, 0)";
+    c.beginPath();
+    c.arc(finalquery[index].x, finalquery[index].y, 2, Math.PI * 2, 0);
+    c.fill();
 }
 
 let mousex = 0;
@@ -220,6 +289,7 @@ window.addEventListener("mousemove", e => {
 function draw() {
     c.clearRect(0, 0, screensize.x, screensize.y);
     buildquadtree(400);
+    hashifyquadtree();
 
     c.fillStyle = "rgb(255, 255, 255)";
     for (let i = 0; i < points.length; i++) {
@@ -228,6 +298,6 @@ function draw() {
 
     getnearestpoint(mousex, mousey);
     
-    requestAnimationFrame(draw);
+    //requestAnimationFrame(draw);
 }
 requestAnimationFrame(draw);
